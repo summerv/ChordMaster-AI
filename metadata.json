@@ -1,0 +1,5 @@
+{
+  "name": "ChordMaster AI",
+  "description": "A professional chord ear training application with multi-instrument support (Piano, Guitar, Violin), real-time audio synthesis, and AI-powered music theory assistance.",
+  "requestFramePermissions": []
+}
