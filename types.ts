@@ -25,6 +25,7 @@ export interface Note {
 export interface Chord {
   root: string;
   quality: ChordQuality;
+  inversion: number; // 0 = Root, 1 = 1st, 2 = 2nd, 3 = 3rd
   displayName: string;
   intervals: number[]; // Semitones from root
 }

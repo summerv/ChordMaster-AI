@@ -20,14 +20,78 @@ const QUALITIES: Record<ChordQuality, number[]> = {
   [ChordQuality.Minor7]: [0, 3, 7, 10],
 };
 
-// Generate all Chords Grouped by Root for easier UI rendering
+// Helper to get note name from root index + interval
+const getNoteName = (rootIndex: number, interval: number): string => {
+  const normIndex = (rootIndex + interval) % 12;
+  return ROOTS[normIndex];
+};
+
+// Helper to generate inversions for a specific chord definition
+const generateVariations = (root: string, quality: ChordQuality, baseIntervals: number[]): Chord[] => {
+  const rootIndex = ROOT_MIDI_MAP[root];
+  const variations: Chord[] = [];
+
+  // Root Position (Inversion 0)
+  variations.push({
+    root,
+    quality,
+    inversion: 0,
+    displayName: `${root}${quality === ChordQuality.Major ? '' : quality === ChordQuality.Minor ? 'm' : quality}`,
+    intervals: baseIntervals
+  });
+
+  // 1st Inversion (Inversion 1)
+  // Move lowest note (0) up 12 semitones
+  const firstInvIntervals = [...baseIntervals.slice(1), baseIntervals[0] + 12];
+  // Calculate bass note for Slash Chord name (the new lowest note)
+  // Original intervals were relative to root.
+  // [0, 4, 7] -> [4, 7, 12]. Lowest is 4 (the 3rd).
+  const bassNote1 = getNoteName(rootIndex, baseIntervals[1]); 
+  variations.push({
+    root,
+    quality,
+    inversion: 1,
+    displayName: `${root}${quality === ChordQuality.Major ? '' : quality === ChordQuality.Minor ? 'm' : quality}/${bassNote1}`,
+    intervals: firstInvIntervals
+  });
+
+  // 2nd Inversion (Inversion 2)
+  // Move the new lowest (originally the 3rd) up 12 semitones
+  // From 1st: [4, 7, 12] -> [7, 12, 16]
+  const secondInvIntervals = [...firstInvIntervals.slice(1), firstInvIntervals[0] + 12];
+  const bassNote2 = getNoteName(rootIndex, baseIntervals[2]);
+  variations.push({
+    root,
+    quality,
+    inversion: 2,
+    displayName: `${root}${quality === ChordQuality.Major ? '' : quality === ChordQuality.Minor ? 'm' : quality}/${bassNote2}`,
+    intervals: secondInvIntervals
+  });
+
+  // 3rd Inversion (Inversion 3) - Only for 7th chords (4 notes)
+  if (baseIntervals.length === 4) {
+    // Move the new lowest (originally the 5th) up 12 semitones
+    // From 2nd: [7, 10, 12, 16] -> [10, 12, 16, 19]
+    const thirdInvIntervals = [...secondInvIntervals.slice(1), secondInvIntervals[0] + 12];
+    const bassNote3 = getNoteName(rootIndex, baseIntervals[3]);
+    variations.push({
+      root,
+      quality,
+      inversion: 3,
+      displayName: `${root}${quality === ChordQuality.Major ? '' : quality === ChordQuality.Minor ? 'm' : quality}/${bassNote3}`,
+      intervals: thirdInvIntervals
+    });
+  }
+
+  return variations;
+};
+
+// Generate all Chords Grouped by Root
 const CHORD_GROUPS: { root: string, chords: Chord[] }[] = ROOTS.map(root => {
-    const chords = Object.values(ChordQuality).map(quality => ({
-        root,
-        quality,
-        displayName: `${root}${quality === ChordQuality.Major ? '' : quality === ChordQuality.Minor ? 'm' : quality}`,
-        intervals: QUALITIES[quality]
-    }));
+    // Flatten all qualities and their inversions into one list for this root
+    const chords = Object.values(ChordQuality).flatMap(quality => 
+        generateVariations(root, quality, QUALITIES[quality])
+    );
     return { root, chords };
 });
 
@@ -41,7 +105,10 @@ const App: React.FC = () => {
   const [pianoTimbre, setPianoTimbre] = useState<PianoTimbre>('Grand');
   const [currentChord, setCurrentChord] = useState<Chord | null>(null);
   const [activeNotes, setActiveNotes] = useState<number[]>([]);
+  
+  // Settings
   const [practiceFilter, setPracticeFilter] = useState<PracticeFilter>('All');
+  const [showInversions, setShowInversions] = useState<boolean>(false);
   
   // Practice State
   const [practice, setPractice] = useState<PracticeSession>({
@@ -89,7 +156,10 @@ const App: React.FC = () => {
     let rootMidi = baseOctave + baseRoot;
     
     // Adjust to ensure we stay within a reasonable listening range if it gets too high
-    if (rootMidi > 80) rootMidi -= 12;
+    // Especially important for inversions which push notes up +12 or +16 semitones
+    // If the base note is too high, shift the whole chord down an octave
+    // Increased threshold slightly for 3rd inversions
+    if (rootMidi > 76) rootMidi -= 12;
 
     return chord.intervals.map(interval => rootMidi + interval);
   }, [instrument]);
@@ -171,10 +241,17 @@ const App: React.FC = () => {
   const startPracticeRound = useCallback(() => {
     // Filter logic
     let pool = ALL_CHORDS_FLAT;
+
+    // 1. Filter by Practice Type (Triads, Sevenths, All)
     if (practiceFilter === 'Triads') {
-        pool = ALL_CHORDS_FLAT.filter(c => c.quality === ChordQuality.Major || c.quality === ChordQuality.Minor);
+        pool = pool.filter(c => c.quality === ChordQuality.Major || c.quality === ChordQuality.Minor);
     } else if (practiceFilter === 'Sevenths') {
-        pool = ALL_CHORDS_FLAT.filter(c => c.quality === ChordQuality.Dominant7 || c.quality === ChordQuality.Major7 || c.quality === ChordQuality.Minor7);
+        pool = pool.filter(c => c.quality === ChordQuality.Dominant7 || c.quality === ChordQuality.Major7 || c.quality === ChordQuality.Minor7);
+    }
+
+    // 2. Filter by Inversion Setting
+    if (!showInversions) {
+        pool = pool.filter(c => c.inversion === 0);
     }
 
     const randomChord = pool[Math.floor(Math.random() * pool.length)];
@@ -211,7 +288,7 @@ const App: React.FC = () => {
         return { ...prev, timer: prev.timer - 1 };
       });
     }, 1000);
-  }, [getChordNotes, instrument, pianoTimbre, practiceFilter, isScoreMode]);
+  }, [getChordNotes, instrument, pianoTimbre, practiceFilter, isScoreMode, showInversions]);
 
   const togglePracticeMode = () => {
     if (practice.isActive) {
@@ -413,6 +490,18 @@ const App: React.FC = () => {
                         <div className={`absolute top-1 left-1 w-3 h-3 bg-white rounded-full transition-transform ${isScoreMode ? 'translate-x-5' : 'translate-x-0'}`} />
                     </button>
                 </div>
+                
+                 {/* Inversions Toggle */}
+                <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">Include Inversions</span>
+                    <button 
+                        onClick={() => !practice.isActive && setShowInversions(!showInversions)}
+                        disabled={practice.isActive}
+                        className={`w-10 h-5 rounded-full relative transition-colors ${showInversions ? 'bg-indigo-500' : 'bg-slate-700'} ${practice.isActive ? 'opacity-50' : ''}`}
+                    >
+                        <div className={`absolute top-1 left-1 w-3 h-3 bg-white rounded-full transition-transform ${showInversions ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                </div>
 
                 {/* Timer Control */}
                 <div>
@@ -604,48 +693,55 @@ const App: React.FC = () => {
            {/* Chord Selector Grid */}
            <div className="lg:col-span-3 bg-slate-900 p-4 rounded-xl border border-slate-800 max-h-[600px] overflow-y-auto chord-grid order-1 lg:order-2">
               <div className="space-y-6">
-                {CHORD_GROUPS.map((group) => (
-                    <div key={group.root} className="space-y-2">
-                        {/* Root Header */}
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-500 bg-slate-800 px-2 py-0.5 rounded">{group.root} Chords</span>
-                            <div className="h-px bg-slate-800 flex-grow"></div>
+                {CHORD_GROUPS.map((group) => {
+                    // Filter chords for display based on showInversions toggle
+                    const chordsToDisplay = group.chords.filter(c => showInversions ? true : c.inversion === 0);
+                    if (chordsToDisplay.length === 0) return null;
+
+                    return (
+                        <div key={group.root} className="space-y-2">
+                            {/* Root Header */}
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-500 bg-slate-800 px-2 py-0.5 rounded">{group.root} Chords</span>
+                                <div className="h-px bg-slate-800 flex-grow"></div>
+                            </div>
+                            {/* Chord Buttons */}
+                            <div className="grid grid-cols-5 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
+                                {chordsToDisplay.map((chord) => {
+                                    const isCurrent = currentChord?.displayName === chord.displayName;
+                                    const isPressed = pressedChordName === chord.displayName;
+                                    
+                                    return (
+                                    <button
+                                        key={chord.displayName}
+                                        onPointerDown={(e) => {
+                                            e.preventDefault(); 
+                                            handleChordPress(chord);
+                                        }}
+                                        onPointerUp={handleChordRelease}
+                                        onPointerLeave={handleChordRelease}
+                                        onPointerCancel={handleChordRelease}
+                                        disabled={practice.isActive && practice.revealed}
+                                        className={`
+                                            relative px-1 py-2 rounded-md text-sm font-bold border transition-all duration-75 select-none touch-none break-all flex items-center justify-center
+                                            ${(isPressed || isCurrent)
+                                                ? 'bg-sky-600 border-sky-400 text-white scale-95 ring-2 ring-sky-900 z-10' 
+                                                : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:border-slate-500'
+                                            }
+                                            ${(practice.isActive && practice.revealed && practice.targetChord?.displayName === chord.displayName)
+                                                ? '!bg-emerald-600 !border-emerald-400 !text-white ring-2 ring-emerald-500 animate-pulse'
+                                                : ''
+                                            }
+                                            ${chord.inversion > 0 ? 'text-[11px] bg-slate-800/50' : ''}
+                                        `}
+                                    >
+                                        {chord.displayName}
+                                    </button>
+                                )})}
+                            </div>
                         </div>
-                        {/* Chord Buttons */}
-                        <div className="grid grid-cols-5 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
-                            {group.chords.map((chord) => {
-                                const isCurrent = currentChord?.displayName === chord.displayName;
-                                const isPressed = pressedChordName === chord.displayName;
-                                
-                                return (
-                                <button
-                                    key={chord.displayName}
-                                    onPointerDown={(e) => {
-                                        e.preventDefault(); 
-                                        handleChordPress(chord);
-                                    }}
-                                    onPointerUp={handleChordRelease}
-                                    onPointerLeave={handleChordRelease}
-                                    onPointerCancel={handleChordRelease}
-                                    disabled={practice.isActive && practice.revealed}
-                                    className={`
-                                        relative px-1 py-2 rounded-md text-sm font-bold border transition-all duration-75 select-none touch-none
-                                        ${(isPressed || isCurrent)
-                                            ? 'bg-sky-600 border-sky-400 text-white scale-95 ring-2 ring-sky-900 z-10' 
-                                            : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:border-slate-500'
-                                        }
-                                        ${(practice.isActive && practice.revealed && practice.targetChord?.displayName === chord.displayName)
-                                            ? '!bg-emerald-600 !border-emerald-400 !text-white ring-2 ring-emerald-500 animate-pulse'
-                                            : ''
-                                        }
-                                    `}
-                                >
-                                    {chord.displayName}
-                                </button>
-                            )})}
-                        </div>
-                    </div>
-                ))}
+                    );
+                })}
               </div>
            </div>
         </div>
